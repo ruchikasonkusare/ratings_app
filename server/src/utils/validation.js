@@ -6,11 +6,13 @@ function validateAddress(address){
     return address && address.length<=400;
 }
 
-function validatePassword(password){
-    const passwordRegrex =/^(?=.*[A-Z])(?=.*[^A-Za-z0-9]).{8,16}$/;
-    return passwordRegrex.test(password);
-}
-
+function validatePassword(password) {
+    const passwordRegex =
+      /^(?=.*[A-Z])(?=.*[^A-Za-z0-9]).{8,16}$/;
+  
+    return passwordRegex.test(password);
+  }
+    
 function validateEmail(email){
     const emailRegrex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegrex.test(email)

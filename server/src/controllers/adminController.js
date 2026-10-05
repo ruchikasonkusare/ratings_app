@@ -1,4 +1,6 @@
+const bcrypt = require('bcryptjs');
 const prisma = require("../prisma");
+const { validateEmail, validateAddress, validateName,validatePassword } = require("../utils/validation");
 
 const dashboard = async (req, res) => {
   try {
@@ -81,7 +83,8 @@ const createUser = async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({message: "Server error"});
+    console.error(error);
+    return res.status(500).json({message: "Server error",error});
   }
 };
 
@@ -151,6 +154,7 @@ const createStore = async (req, res) => {
       store,
     });
   } catch (error) {
+    console.error(error);
     return res.status(500).json({message: "Server error"});
   }
 };
@@ -224,19 +228,71 @@ const getUsers = async (req, res) => {
   }
 };
 
-const getUserDetails = async (req, res) => {
+const updateUser = async (req, res) => {
   try {
     const userId = Number(req.params.id);
 
-    if (Number.isNaN(userId)) {
-      return res.status(400).json({message: "Invalid user ID"});
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID",
+      });
     }
 
-    const user = await prisma.user.findUnique({
+    const { name, email, address, role } = req.body;
+
+    if (!name || !email || !address || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email, address and role are required",
+      });
+    }
+
+    const allowedRoles = ["ADMIN", "USER", "OWNER"];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role",
+      });
+    }
+
+    const existingUser = await prisma.user.findUnique({
       where: {
         id: userId,
       },
+    });
 
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const emailUser = await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    if (emailUser && emailUser.id !== userId) {
+      return res.status(409).json({
+        success: false,
+        message: "Email already belongs to another user",
+      });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: {
+        id: userId,
+      },
+      data: {
+        name,
+        email,
+        address,
+        role,
+      },
       select: {
         id: true,
         name: true,
@@ -244,42 +300,114 @@ const getUserDetails = async (req, res) => {
         address: true,
         role: true,
         createdAt: true,
+      },
+    });
 
-        ratings: {
+    return res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("UPDATE USER ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update user",
+      error: error.message,
+    });
+  }
+};
+
+const getUserDetails = async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+      include: {
+        _count: {
           select: {
-            id: true,
-            rating: true,
-            createdAt: true,
-            updatedAt: true,
-
-            store: {
-              select: {
-                id: true,
-                name: true,
-                address: true,
-              },
-            },
+            ratings: true,
+            stores: true,
           },
         },
-
         stores: {
           select: {
             id: true,
             name: true,
             email: true,
             address: true,
+            ratings: {
+              select: {
+                rating: true,
+              },
+            },
           },
         },
       },
     });
 
     if (!user) {
-      return res.status(404).json({message: "User not found",});
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
     }
 
-    return res.json({user});
+    // Calculate store ratings for owners
+    const stores = user.stores.map((store) => {
+      const totalRatings = store.ratings.length;
+
+      const averageRating =
+        totalRatings > 0
+          ? store.ratings.reduce(
+              (sum, item) => sum + item.rating,
+              0
+            ) / totalRatings
+          : 0;
+
+      return {
+        id: store.id,
+        name: store.name,
+        email: store.email,
+        address: store.address,
+        averageRating: Number(averageRating.toFixed(1)),
+        ratingsCount: totalRatings,
+      };
+    });
+
+    // Don't send password hash
+    const {
+      passwordHash,
+      stores: userStores,
+      ...userData
+    } = user;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...userData,
+        stores,
+      },
+    });
   } catch (error) {
-    return res.status(500).json({message: "Server error"});
+    console.error("GET USER DETAILS ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user details",
+      error: error.message,
+    });
   }
 };
 
@@ -372,6 +500,229 @@ const getStores = async (req, res) => {
   }
 };
 
+const getStoreDetails = async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+
+    console.log("STORE ID:", storeId);
+
+    if (!Number.isInteger(storeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid store ID",
+      });
+    }
+
+    const store = await prisma.store.findUnique({
+      where: {
+        id: storeId,
+      },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+          },
+        },
+        _count: {
+          select: {
+            ratings: true,
+          },
+        },
+      },
+    });
+
+    console.log("STORE FOUND:", store);
+
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const ratingAggregate = await prisma.rating.aggregate({
+      where: {
+        storeId: storeId,
+      },
+      _avg: {
+        rating: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...store,
+        averageRating: ratingAggregate._avg.rating || 0,
+      },
+    });
+  } catch (error) {
+    console.error("GET STORE DETAILS ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch store details",
+      error: error.message,
+    });
+  }
+};
+
+const updateStore = async (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const { name, email, address, ownerId } = req.body;
+
+    // Validate store ID
+    if (!Number.isInteger(storeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid store ID",
+      });
+    }
+
+    // Required fields
+    if (!name || !email || !address) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email and address are required",
+      });
+    }
+
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const cleanAddress = address.trim();
+
+    // Store name validation
+    if (cleanName.length < 20 || cleanName.length > 60) {
+      return res.status(400).json({
+        success: false,
+        message: "Store name must be between 20 and 60 characters",
+      });
+    }
+
+    // Address validation
+    if (cleanAddress.length > 400) {
+      return res.status(400).json({
+        success: false,
+        message: "Address must not exceed 400 characters",
+      });
+    }
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email address",
+      });
+    }
+
+    // Check that store exists
+    const existingStore = await prisma.store.findUnique({
+      where: {
+        id: storeId,
+      },
+    });
+
+    if (!existingStore) {
+      return res.status(404).json({
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    // Validate owner
+    let newOwnerId = null;
+
+    if (
+      ownerId !== null &&
+      ownerId !== undefined &&
+      ownerId !== ""
+    ) {
+      const owner = await prisma.user.findUnique({
+        where: {
+          id: Number(ownerId),
+        },
+      });
+
+      if (!owner) {
+        return res.status(404).json({
+          success: false,
+          message: "Owner not found",
+        });
+      }
+
+      if (owner.role !== "OWNER") {
+        return res.status(400).json({
+          success: false,
+          message: "Selected user is not an owner",
+        });
+      }
+
+      newOwnerId = owner.id;
+    }
+
+    // Update store
+    const updatedStore = await prisma.store.update({
+      where: {
+        id: storeId,
+      },
+      data: {
+        name: cleanName,
+        email: cleanEmail,
+        address: cleanAddress,
+        ownerId: newOwnerId,
+      },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+          },
+        },
+        _count: {
+          select: {
+            ratings: true,
+          },
+        },
+      },
+    });
+
+    // Calculate average rating
+    const ratingAggregate = await prisma.rating.aggregate({
+      where: {
+        storeId: storeId,
+      },
+      _avg: {
+        rating: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Store updated successfully",
+      data: {
+        ...updatedStore,
+        averageRating: ratingAggregate._avg.rating || 0,
+      },
+    });
+  } catch (error) {
+    console.error("UPDATE STORE ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update store",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   dashboard,
   createUser,
@@ -379,4 +730,7 @@ module.exports = {
   getUsers,
   getUserDetails,
   getStores,
+  getStoreDetails,
+  updateStore,
+  updateUser
 };

@@ -6,6 +6,7 @@ const authorizeRoles = require("../middlewares/roleMiddleware");
 const {
   dashboard,
   updatePassword,
+  getOwnerDashboard,
 } = require("../controllers/ownerController");
 
 const router = express.Router();
@@ -13,8 +14,8 @@ const router = express.Router();
 router.use(authenticate);
 router.use(authorizeRoles("OWNER"));
 
-router.get("/dashboard", dashboard);
+router.get("/dashboard", getOwnerDashboard);
 
-router.put("/password",updatePassword);
+// router.put("/password",updatePassword);
 
 module.exports = router;

@@ -16,7 +16,14 @@ router.use(authorizeRoles("USER"));
 
 router.get("/stores", getStores);
 
-router.post("/stores/:storeId/rating",submitRating);
+// router.post("/stores/:storeId/rating",submitRating);
+
+router.post(
+  "/stores/:storeId/rating",
+  authenticate,
+  authorizeRoles("USER"),
+  submitRating
+);
 
 router.put("/password",updatePassword);
 

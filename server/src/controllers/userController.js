@@ -6,39 +6,29 @@ const {validatePassword} = require("../utils/validation");
 
 const getStores = async (req, res) => {
   try {
-    const {search = "",sort = "name",order = "asc",} = req.query;
-
-    const allowedSortFields = [
-      "name",
-      "email",
-      "address",
-      "createdAt",
-    ];
-
-    const safeSort = allowedSortFields.includes(sort)? sort: "name";
-
-    const safeOrder =order.toLowerCase() === "desc"? "desc": "asc";
+    const {
+      search = "",
+      sortBy = "name",
+      order = "asc",
+    } = req.query;
 
     const stores = await prisma.store.findMany({
-      where: search
-        ? {
-            OR: [
-              {
-                name: {
-                  contains: search,
-                  mode: "insensitive",
-                },
-              },
-              {
-                address: {
-                  contains: search,
-                  mode: "insensitive",
-                },
-              },
-            ],
-          }
-        : {},
-
+      where: {
+        OR: [
+          {
+            name: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            address: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
       include: {
         ratings: {
           select: {
@@ -47,46 +37,66 @@ const getStores = async (req, res) => {
           },
         },
       },
-
-      orderBy: {
-        [safeSort]: safeOrder,
-      },
     });
 
-    const formattedStores = stores.map((store) => {
-        const total = store.ratings.reduce(
-          (sum, item) => sum + item.rating,0
-        );
+    const result = stores.map((store) => {
+      const ratings = store.ratings;
 
-        const averageRating =store.ratings.length > 0
-            ? Number(
-                (
-                  total / store.ratings.length
-                ).toFixed(2)
-              )
-            : 0;
+      const totalRating = ratings.reduce(
+        (sum, item) => sum + item.rating,
+        0
+      );
 
-        const currentUserRating =store.ratings.find(
-            (item) =>item.userId === req.user.userId
-          );
+      const averageRating =
+        ratings.length > 0
+          ? Number((totalRating / ratings.length).toFixed(1))
+          : 0;
 
-        return {
-          id: store.id,
-          name: store.name,
-          email: store.email,
-          address: store.address,
+      const currentUserRating = ratings.find(
+        (item) => item.userId === req.user.userId
+      );
 
-          overallRating: averageRating,
+      return {
+        id: store.id,
+        name: store.name,
+        address: store.address,
+        averageRating,
+        userRating: currentUserRating
+          ? currentUserRating.rating
+          : 0,
+        ratingsCount: ratings.length,
+      };
+    });
 
-          myRating: currentUserRating
-            ? currentUserRating.rating
-            : null,
-        };
+    result.sort((a, b) => {
+      let valueA = a[sortBy];
+      let valueB = b[sortBy];
+
+      if (valueA === null || valueA === undefined) valueA = 0;
+      if (valueB === null || valueB === undefined) valueB = 0;
+
+      if (typeof valueA === "string") {
+        return order === "asc"
+          ? valueA.localeCompare(valueB)
+          : valueB.localeCompare(valueA);
       }
-    );
-    return res.json({stores: formattedStores});
+
+      return order === "asc"
+        ? valueA - valueB
+        : valueB - valueA;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
   } catch (error) {
-    return res.status(500).json({message: "Server error"});
+    console.error("GET STORES ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
 
@@ -94,14 +104,21 @@ const getStores = async (req, res) => {
 const submitRating = async (req, res) => {
   try {
     const storeId = Number(req.params.storeId);
-    const { rating } = req.body;
+    const userId = req.user.userId;
+    const rating = Number(req.body.rating);
 
-    if (Number.isNaN(storeId)) {
-        return res.status(400).json({message: "Invalid store ID"});
+    if (!Number.isInteger(storeId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid store ID",
+      });
     }
 
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      return res.status(400).json({message:"Rating must be an integer between 1 and 5"});
+      return res.status(400).json({
+        success: false,
+        message: "Rating must be between 1 and 5",
+      });
     }
 
     const store = await prisma.store.findUnique({
@@ -112,32 +129,41 @@ const submitRating = async (req, res) => {
 
     if (!store) {
       return res.status(404).json({
+        success: false,
         message: "Store not found",
       });
     }
 
-    const result = await prisma.rating.upsert({
+    const savedRating = await prisma.rating.upsert({
       where: {
         userId_storeId: {
-          userId: req.user.userId,
+          userId,
           storeId,
         },
       },
-
-      update: {rating},
+      update: {
+        rating,
+      },
       create: {
-        userId: req.user.userId,
+        userId,
         storeId,
         rating,
       },
     });
 
-    return res.json({
-      message: "Rating submitted successfully",
-      rating: result,
+    return res.status(200).json({
+      success: true,
+      message: "Rating saved successfully",
+      data: savedRating,
     });
   } catch (error) {
-    return res.status(500).json({message: "Server error"});
+    console.error("SUBMIT RATING ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save rating",
+      error: error.message,
+    });
   }
 };
 
